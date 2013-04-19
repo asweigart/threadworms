@@ -217,7 +217,7 @@ class Worm(threading.Thread): # "Thread" is a class in the "threading" module.
             # loop is time that could have been spent executing other thread's
             # code.
             # Of course, if ALL worms' threads are sleeping, then the computer
-            # can knows it can use the CPU to run other programs besides the
+            # can know it can use the CPU to run other programs besides
             # our Python Threadworms script.
             pygame.time.wait(self.speed)
 
@@ -274,7 +274,7 @@ class Worm(threading.Thread): # "Thread" is a class in the "threading" module.
         if newDirection == []:
             return None # None is returned when there are no possible ways for the worm to move.
 
-        return random.choice(newDirection) #
+        return random.choice(newDirection)
 
 def main():
     global FPSCLOCK, DISPLAYSURF

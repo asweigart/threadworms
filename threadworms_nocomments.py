@@ -180,7 +180,7 @@ class Worm(threading.Thread): # "Thread" is a class in the "threading" module.
         if newDirection == []:
             return None # None is returned when there are no possible ways for the worm to move.
 
-        return random.choice(newDirection) #
+        return random.choice(newDirection)
 
 def main():
     global FPSCLOCK, DISPLAYSURF
@@ -265,12 +265,6 @@ def drawGrid():
 
 
 def setGridSquares(squares, color=(192, 192, 192)):
-    # "squares" is a multiline string that has '.' to express "no change", a
-    # ' ' space to set the cell to be empty, and any other character will
-    # set the space with the value in "color"
-    # Blank lines in squares are ignored for the first and last line, to make
-    # typing the string easier.
-    #
     # squares is set to a value like:
     # """
     # ......
