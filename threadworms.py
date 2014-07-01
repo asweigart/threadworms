@@ -1,3 +1,5 @@
+#! python3
+
 # Threadworms (a Python/Pygame threading demonstration)
 # By Al Sweigart al@inventwithpython.com
 # http://inventwithpython.com/blog
@@ -30,7 +32,12 @@ GRID = []
 for x in range(CELLS_WIDE):
     GRID.append([None] * CELLS_HIGH)
 
-GRID_LOCK = threading.Lock() # pun was not intended
+GRID_LOCKS = [] # pun was not intended
+for x in range(CELLS_WIDE):
+    column = []
+    for y in range(CELLS_HIGH):
+        column.append(threading.Lock()) # create one Lock object for each cell
+    GRID_LOCKS.append(column)
 
 # Constants for some colors.
 #             R    G    B
@@ -67,7 +74,7 @@ BUTT = -1 # negative indexes count from the end, so -1 will always be the last i
 WORMS_RUNNING = True
 
 class Worm(threading.Thread): # "Thread" is a class in the "threading" module.
-    def __init__(self, name='Worm', maxsize=None, color=None, speed=None):
+    def __init__(self, name='Worm', maxsize=None, color=None, speed=20):
         # name can be used for debugging purposes. It will appear in any thrown exceptions so you can tell which thread crashed.
         # maxsize is the length of the worm (in body segments).
         # color is an RGB tuple for the worm. The darker shade is automatically calculated.
@@ -99,21 +106,20 @@ class Worm(threading.Thread): # "Thread" is a class in the "threading" module.
         else:
             self.speed = speed
 
-        # This thread will wait until the global GRID_LOCK lock is released
-        # (if it is currently acquired by a different thread). If another thread
-        # has currently acquired the lock, the acquire() call will not return
-        # (i.e. it will "block") until the lock is released by that other thread.
-        # (There may be a queue of threads that are currently waiting to acquire
-        # the lock, and they might be selected to run first. In that case, we
-        # have to wait until _they_ call release().)
-        GRID_LOCK.acquire() # block until this thread can acquire the lock
-
         # The body starts as a single segment at a random location (but make sure
         # it is unoccupied.)
         # As the worm begins to move, new segments will be added until it reaches full length.
         while True:
             startx = random.randint(0, CELLS_WIDE - 1)
             starty = random.randint(0, CELLS_HIGH - 1)
+            # This thread will wait until the Lock in GRID_LOCKS is released
+            # (if it is currently acquired by a different thread). If another thread
+            # has currently acquired the lock, the acquire() call will not return
+            # (i.e. it will "block") until the lock is released by that other thread.
+            # (There may be a queue of threads that are currently waiting to acquire
+            # the lock, and they might be selected to run first. In that case, we
+            # have to wait until _they_ call release().)
+            GRID_LOCKS[startx][starty].acquire() # block until this thread can acquire the lock
             if GRID[startx][starty] is None:
                 break # we've found an unoccupied cell in the grid
 
@@ -122,7 +128,7 @@ class Worm(threading.Thread): # "Thread" is a class in the "threading" module.
         # Now that we're done modifying the data structure that is shared
         # by all the threads (i.e. GRID), we can release the lock so that
         # other threads can acquire it.
-        GRID_LOCK.release()
+        GRID_LOCKS[startx][starty].release()
 
         # The worm's body starts as a single segment, and keeps growing until it
         # reaches full length. This makes setup easier.
@@ -139,7 +145,7 @@ class Worm(threading.Thread): # "Thread" is a class in the "threading" module.
         # This means that instead of the Pygame grid display, we could write
         # code that displays the worms in 3D without changing the Worm class's
         # code at all. The visualization code just has to read the GRID variable
-        # (in a thread-safe manner by using GRID_LOCK, of course).
+        # (in a thread-safe manner by using GRID_LOCKS, of course).
         while True:
             if not WORMS_RUNNING:
                 return # A thread terminates when run() returns.
@@ -148,11 +154,16 @@ class Worm(threading.Thread): # "Thread" is a class in the "threading" module.
             if random.randint(0, 100) < 20: # 20% to change direction
                 self.direction = random.choice((UP, DOWN, LEFT, RIGHT))
 
+            nextx, nexty = self.getNextPosition()
+
             # We are going to make modifications to GRID, so we need to acquire
             # the lock first.
-            GRID_LOCK.acquire() # don't return (that is, block) until this thread can acquire the lock
+            origx, origy = nextx, nexty
+            if origx not in (-1, CELLS_WIDE) and origy not in (-1, CELLS_HIGH):
+                gotLock = GRID_LOCKS[origx][origy].acquire(timeout=1) # don't return (that is, block) until this thread can acquire the lock
+                if not gotLock:
+                    continue
 
-            nextx, nexty = self.getNextPosition()
             # Really, we should check if nextx < 0 or nextx >= CELLS_WIDE, but
             # since worms only move one space at a time, we can get away with
             # just checking if they are at -1 or CELLS_WIDE/CELLS_HIGH.
@@ -168,16 +179,29 @@ class Worm(threading.Thread): # "Thread" is a class in the "threading" module.
                 if self.direction is not None:
                     # It is possible to move in some direction, so reask for the next postion.
                     nextx, nexty = self.getNextPosition()
+            if origx not in (-1, CELLS_WIDE) and origy not in (-1, CELLS_HIGH):
+                GRID_LOCKS[origx][origy].release()
+
 
             if self.direction is not None:
+                GRID_LOCKS[nextx][nexty].acquire()
                 # Space on the grid is free, so move there.
                 GRID[nextx][nexty] = self.color # update the GRID state
+                GRID_LOCKS[nextx][nexty].release()
                 self.body.insert(0, {'x': nextx, 'y': nexty}) # update this worm's own state
 
                 # Check if we've grown too long, and cut off tail if we have.
                 # This gives the illusion of the worm moving.
+
+                # TODO - here's where our bug is. Sometimes the worms are still growing but they run into each other. This is what holds up their threads.
                 if len(self.body) > self.maxsize:
+                    # TODO - something weird is going on here. Doing the sepukku routine lets us quit cleanly, but the worm still appears drawn on the screen.
+                    gotLock = GRID_LOCKS[self.body[BUTT]['x']][self.body[BUTT]['y']].acquire(timeout=2)
+                    if not gotLock:
+                        self.maxsize -= 1 # TODO - not entirely sure why this imrpoves the framerate.
+                        #print('chop %s' % (self.name))
                     GRID[self.body[BUTT]['x']][self.body[BUTT]['y']] = None # update the GRID state
+                    GRID_LOCKS[self.body[BUTT]['x']][self.body[BUTT]['y']].release()
                     del self.body[BUTT] # update this worm's own state (heh heh, worm butt)
             else:
                 self.direction = random.choice((UP, DOWN, LEFT, RIGHT)) # can't move, so just do nothing for now but set a new random direction
@@ -192,9 +216,6 @@ class Worm(threading.Thread): # "Thread" is a class in the "threading" module.
             # I call this a worm knot. I left my computer running with 24 worms
             # moving with 0 speed overnight, but I didn't see any of these worm
             # knots form, so I'm guessing it is super rare.
-
-            # Done modifying GRID, so release the GRID_LOCK lock.
-            GRID_LOCK.release()
 
             # Pygame's pygame.time.wait() and the Python Standard Library's
             # time.time() functions (and the tick() method) are smart enough
@@ -309,9 +330,10 @@ def main():
     # Create the worm objects.
     worms = [] # a list that contains all the worm objects
     for i in range(NUM_WORMS):
-        worms.append(Worm())
+        worms.append(Worm(name='Worm %s' % i))
         worms[-1].start() # Start the worm code in its own thread.
 
+    DISPLAYSURF.fill(BGCOLOR)
     while True: # main game loop
         handleEvents()
         drawGrid()
@@ -333,29 +355,33 @@ def handleEvents():
 
 def drawGrid():
     # Draw the grid lines.
-    DISPLAYSURF.fill(BGCOLOR)
     for x in range(0, WINDOWWIDTH, CELL_SIZE): # draw vertical lines
         pygame.draw.line(DISPLAYSURF, GRID_LINES_COLOR, (x, 0), (x, WINDOWHEIGHT))
     for y in range(0, WINDOWHEIGHT, CELL_SIZE): # draw horizontal lines
         pygame.draw.line(DISPLAYSURF, GRID_LINES_COLOR, (0, y), (WINDOWWIDTH, y))
 
     # The main thread that stays in the main loop (which calls drawGrid) also
-    # needs to acquire the GRID_LOCK lock before modifying the GRID variable.
-    GRID_LOCK.acquire()
+    # needs to acquire the GRID_LOCKS lock before modifying the GRID variable.
 
     for x in range(0, CELLS_WIDE):
         for y in range(0, CELLS_HIGH):
+            gotLock = GRID_LOCKS[x][y].acquire(timeout=0.02)
+            if not gotLock:
+                # If we can't acquire the lock for this cell, don't draw anything and just leave it as it is.
+                continue
+
             if GRID[x][y] is None:
-                continue # No body segment at this cell to draw, so skip it
+                # No body segment at this cell to draw, so draw a blank square
+                pygame.draw.rect(DISPLAYSURF, BGCOLOR, (x * CELL_SIZE + 1, y * CELL_SIZE + 1, CELL_SIZE - 1, CELL_SIZE - 1))
+                GRID_LOCKS[x][y].release() # We're done reading GRID, so release the lock.
+            else:
+                color = GRID[x][y] # read the GRID data structure
+                GRID_LOCKS[x][y].release() # We're done messing with GRID, so release the lock.
 
-            color = GRID[x][y] # modify the GRID data structure
-
-            # Draw the body segment on the screen
-            darkerColor = (max(color[0] - 50, 0), max(color[1] - 50, 0), max(color[2] - 50, 0))
-            pygame.draw.rect(DISPLAYSURF, darkerColor, (x * CELL_SIZE,     y * CELL_SIZE,     CELL_SIZE,     CELL_SIZE    ))
-            pygame.draw.rect(DISPLAYSURF, color,       (x * CELL_SIZE + 4, y * CELL_SIZE + 4, CELL_SIZE - 8, CELL_SIZE - 8))
-
-    GRID_LOCK.release() # We're done messing with GRID, so release the lock.
+                # Draw the body segment on the screen
+                darkerColor = (max(color[0] - 50, 0), max(color[1] - 50, 0), max(color[2] - 50, 0))
+                pygame.draw.rect(DISPLAYSURF, darkerColor, (x * CELL_SIZE,     y * CELL_SIZE,     CELL_SIZE,     CELL_SIZE    ))
+                pygame.draw.rect(DISPLAYSURF, color,       (x * CELL_SIZE + 4, y * CELL_SIZE + 4, CELL_SIZE - 8, CELL_SIZE - 8))
 
 
 def setGridSquares(squares, color=(192, 192, 192)):
@@ -379,16 +405,17 @@ def setGridSquares(squares, color=(192, 192, 192)):
     if squares[-1] == '':
         del squares[-1]
 
-    GRID_LOCK.acquire()
     for y in range(min(len(squares), CELLS_HIGH)):
         for x in range(min(len(squares[y]), CELLS_WIDE)):
+            GRID_LOCKS[x][y].acquire()
             if squares[y][x] == ' ':
                 GRID[x][y] = None
             elif squares[y][x] == '.':
                 pass
             else:
                 GRID[x][y] = color
-    GRID_LOCK.release()
+            GRID_LOCKS[x][y].release()
+
 
 if __name__ == '__main__':
     main()
